@@ -4,23 +4,23 @@ import {readFile} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 const root=fileURLToPath(new URL('./public/',import.meta.url));
 const COLORS=['#edaf57','#6cb8df','#c991da','#7dc79a','#ef8e93','#a9a0ed','#d2ce78','#70c8c1'];
-const TYPES=['fog','shield','shuffle'];
+const TYPES=['fog','shield','shuffle','bomb'];
 function fail(message,status=400){throw Object.assign(new Error(message),{status});}
 function shuffled(n){const a=Array.from({length:n},(_,i)=>i);for(let i=n-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[a[i],a[j]]=[a[j],a[i]];}return a;}
 export function advanceItems(r,now,random=Math.random){
  if(r.status!=='playing'||!r.items||r.mode==='coop'||now<r.nextItemAt)return false;
  const waves=Math.floor((now-r.nextItemAt)/(r.itemInterval*1000))+1;
- for(const p of r.players)for(let i=0,n=Math.min(waves,r.bagSize-p.bag.length);i<n;i++)p.bag.push({id:randomUUID(),type:TYPES[Math.min(2,Math.floor(random()*3))]});
+ for(const p of r.players)for(let i=0,n=Math.min(waves,r.bagSize-p.bag.length);i<n;i++)p.bag.push({id:randomUUID(),type:TYPES[Math.min(TYPES.length-1,Math.floor(random()*TYPES.length))]});
  r.nextItemAt+=waves*r.itemInterval*1000;return true;
 }
 function boardFor(r,p){return r.mode==='coop'?r.shared:r.mode==='team'?r.teams[p.team]:p.placed;}
-function player(s,name,team,index){return {id:randomUUID(),sid:s.id,name:typeof name==='string'?name.trim().slice(0,24)||'เพื่อนใหม่':'เพื่อนใหม่',color:COLORS[index%8],team,placed:[],bag:[],fog:0,shield:0,shuffleVersion:0,ready:false,lastMove:0,presence:null};}
+function player(s,name,team,index){return {id:randomUUID(),sid:s.id,name:typeof name==='string'?name.trim().slice(0,24)||'เพื่อนใหม่':'เพื่อนใหม่',color:COLORS[index%8],team,placed:[],bag:[],fog:0,shield:0,shuffleVersion:0,blast:null,ready:false,lastMove:0,presence:null};}
 function newRound(r){
  r.revision=(r.revision||0)+1;r.round++;r.started=null;r.finished=null;r.winner=null;r.shared=[];r.teams={a:[],b:[]};r.hints=0;r.order=shuffled(r.cols*r.rows);r.layout=shuffled(r.cols*r.rows);r.status='lobby';r.nextItemAt=null;
- for(const p of r.players)Object.assign(p,{placed:[],bag:[],fog:0,shield:0,shuffleVersion:0,ready:false,lastMove:0,presence:null});
+ for(const p of r.players)Object.assign(p,{placed:[],bag:[],fog:0,shield:0,shuffleVersion:0,blast:null,ready:false,lastMove:0,presence:null});
 }
 function view(r,p,now){
- return {revision:r.revision,code:r.code,mode:r.mode,cols:r.cols,rows:r.rows,image:r.image.startsWith('data:')?'upload':r.image,items:r.items,bagSize:r.bagSize,itemInterval:r.itemInterval,nextItemAt:r.nextItemAt,bag:p.bag,preview:r.preview,layout:r.layout,order:r.order,round:r.round,status:r.status,started:r.started,finished:r.finished,winner:r.winner,host:r.host,you:p.id,team:p.team,placed:boardFor(r,p),fog:p.fog,shield:p.shield,shuffleVersion:p.shuffleVersion,hints:r.hints,serverNow:now,
+ return {revision:r.revision,code:r.code,mode:r.mode,cols:r.cols,rows:r.rows,image:r.image.startsWith('data:')?'upload':r.image,items:r.items,bagSize:r.bagSize,itemInterval:r.itemInterval,nextItemAt:r.nextItemAt,bag:p.bag,preview:r.preview,layout:r.layout,order:r.order,round:r.round,status:r.status,started:r.started,finished:r.finished,winner:r.winner,host:r.host,you:p.id,team:p.team,placed:boardFor(r,p),fog:p.fog,shield:p.shield,shuffleVersion:p.shuffleVersion,blast:p.blast,hints:r.hints,serverNow:now,
  teams:[{id:'a',name:'ทีมดอกไม้',color:'#dc9c7e',count:r.teams.a.length},{id:'b',name:'ทีมใบไม้',color:'#7bb4a0',count:r.teams.b.length}],
  players:r.players.map(q=>({id:q.id,name:q.name,color:q.color,team:q.team,online:[...r.streams].some(s=>s.pid===q.id),count:q.placed.length,progress:boardFor(r,q).length,ready:q.ready}))};
 }
@@ -82,6 +82,20 @@ export function createApp({clock=Date.now,random=Math.random}={}){
       else if(r.mode==='team'){if(!['a','b'].includes(b.target)||b.target===p.team)fail('เลือกทีมฝ่ายตรงข้าม');targets=r.players.filter(q=>q.team===b.target);}
       else{const target=r.players.find(q=>q.id===b.target&&q.id!==p.id);if(!target)fail('เลือกคู่แข่งก่อน');targets=[target];}
       if(!targets.length)fail('ไม่มีเป้าหมายแล้ว');p.bag.splice(index,1);
+      if(item.type==='bomb'){
+       // A team shares one board: remove once, then notify each recipient independently.
+       const exposed=targets.filter(q=>q.shield<=now),victim=exposed[0],id=randomUUID();
+       if(victim){
+        const board=boardFor(r,victim),anchor=board.length?board[Math.min(board.length-1,Math.floor(random()*board.length))]:null;
+        const center=anchor===null?Math.floor(r.cols*r.rows/2):r.layout[anchor],cx=center%r.cols,cy=Math.floor(center/r.cols);
+        const distance=piece=>{const cell=r.layout[piece];return (cell%r.cols-cx)**2+(Math.floor(cell/r.cols)-cy)**2;};
+        const removed=[...board].sort((a,b)=>distance(a)-distance(b)||a-b).slice(0,Math.min(24,Math.ceil(board.length*.25)));
+        const lost=new Set(removed);board.splice(0,board.length,...board.filter(piece=>!lost.has(piece)));
+        if(r.mode==='team')for(const q of targets)q.placed=q.placed.filter(piece=>!lost.has(piece));
+        for(const q of exposed)q.blast={id,at:now,center,removed,blocked:false};
+       }
+       for(const q of targets.filter(q=>q.shield>now))q.blast={id,at:now,center:Math.floor(r.cols*r.rows/2),removed:[],blocked:true};
+      }
       for(const target of targets){if(item.type==='shield'){target.shield=now+12000;target.fog=0;}else if(target.shield<=now){if(item.type==='fog')target.fog=now+6000;else if(item.type==='shuffle')target.shuffleVersion++;}}
      }else fail('ไม่รู้จักคำสั่ง');broadcast(r);result={...result,state:view(r,p,clock())};
     }else fail('ไม่พบ API',404);

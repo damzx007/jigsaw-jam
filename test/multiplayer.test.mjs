@@ -39,7 +39,7 @@ test('Fog and shield apply to entire teams; allies cannot attack each other',asy
  w.tick(13000);const next=(await w.state(1)).body;await w.action(1,'use-item',{itemId:next.bag.find(x=>x.type==='fog').id,target:'a'});assert.ok((await w.state(0)).body.fog>0);await w.action(0,'use-item',{itemId:a.bag[1].id});assert.equal((await w.state(2)).body.fog,0);
 });
 test('Shuffle item only marks enemy tray and preserves all completed pieces',async t=>{
- const w=await room(t,'ffa',{itemInterval:5});await w.start();await w.place(1,0);w.roll(.9);const a=await w.wave(),b=(await w.state(1)).body;await w.action(0,'use-item',{itemId:a.bag[0].id,target:b.you});const after=(await w.state(1)).body;assert.equal(after.shuffleVersion,1);assert.deepEqual(after.placed,[0]);assert.equal((await w.state(0)).body.shuffleVersion,0);
+ const w=await room(t,'ffa',{itemInterval:5});await w.start();await w.place(1,0);w.roll(.6);const a=await w.wave(),b=(await w.state(1)).body;await w.action(0,'use-item',{itemId:a.bag[0].id,target:b.you});const after=(await w.state(1)).body;assert.equal(after.shuffleVersion,1);assert.deepEqual(after.placed,[0]);assert.equal((await w.state(0)).body.shuffleVersion,0);
 });
 test('Nightmare 300 pieces, countdown prevents early moves, start-only preview disallows hint',async t=>{
  const w=await room(t,'coop',{cols:20,image:'tiles',preview:'start'},1);assert.equal(w.r.cols*w.r.rows,300);assert.equal(new Set(w.r.layout).size,300);const result=await w.action(0,'start');assert.ok(result.body.state.started>result.body.state.serverNow);assert.equal((await w.place(0,0)).status,400);w.tick(3100);for(let i=0;i<5;i++)await w.place(0,i);assert.equal((await w.action(0,'hint',{piece:7})).status,400);
@@ -62,4 +62,19 @@ test('Items stop at match end; disabled bags never roll; automatic rolls cannot 
  const stopped=await room(t,'ffa');await stopped.start();for(let id=0;id<12;id++)await stopped.place(0,id);stopped.tick(200000);assert.equal((await stopped.state(0)).body.bag.length,0);
  const off=await room(t,'ffa',{items:false});await off.start();off.tick(100000);assert.equal((await off.state(0)).body.bag.length,0);
  const idle=await room(t,'ffa');await idle.start();idle.tick(6*3600000+1);await new Promise(resolve=>setTimeout(resolve,650));assert.equal((await idle.state(0)).status,404);
+});
+test('Bomb removes a local quarter of FFA board, returns pieces, isolates bystanders and cannot replay',async t=>{
+ const w=await room(t,'ffa',{},3);await w.start();for(let i=0;i<8;i++)await w.place(1,i);await w.place(2,0);w.roll(.99);const a=await w.wave();assert.equal(a.bag[0].type,'bomb');
+ await w.action(0,'use-item',{itemId:a.bag[0].id,target:(await w.state(1)).body.you});const hit=(await w.state(1)).body;assert.equal(hit.placed.length,6);assert.equal(hit.blast.removed.length,2);assert.equal(hit.blast.blocked,false);assert.ok(hit.blast.removed.every(id=>!hit.placed.includes(id)));assert.deepEqual((await w.state(2)).body.placed,[0]);assert.equal((await w.state(0)).body.blast,null);
+ assert.equal((await w.action(0,'use-item',{itemId:a.bag[0].id,target:hit.you})).status,400);for(const id of hit.blast.removed)assert.equal((await w.place(1,id)).status,200);assert.equal((await w.state(1)).body.placed.length,8);
+});
+test('Team bomb damages shared board once, corrects contributions and notifies all allies; shield blocks',async t=>{
+ const w=await room(t,'team',{itemInterval:5},4);await w.start();for(let i=0;i<8;i++)await w.place(i%2===0?1:3,i);w.roll(.99);let a=await w.wave();assert.equal((await w.action(0,'use-item',{itemId:a.bag[0].id,target:'a'})).status,400);await w.action(0,'use-item',{itemId:a.bag[0].id,target:'b'});
+ const b=(await w.state(1)).body,c=(await w.state(3)).body;assert.equal(b.placed.length,6);assert.deepEqual(b.blast,c.blast);assert.equal(b.players.filter(p=>p.team==='b').reduce((n,p)=>n+p.count,0),6);assert.deepEqual((await w.state(2)).body.placed,[]);
+ w.roll(.4);await w.wave();let defender=(await w.state(1)).body;await w.action(1,'use-item',{itemId:defender.bag.find(x=>x.type==='shield').id});w.roll(.99);a=await w.wave();await w.action(0,'use-item',{itemId:a.bag.find(x=>x.type==='bomb').id,target:'b'});const saved=(await w.state(3)).body;assert.equal(saved.blast.blocked,true);assert.deepEqual(saved.placed,b.placed);assert.deepEqual(saved.blast.removed,[]);
+});
+test('Bomb handles empty boards, single piece, 300-piece cap',async t=>{
+ const w=await room(t,'ffa',{cols:20});await w.start();w.roll(.99);let a=await w.wave(),victim=(await w.state(1)).body;await w.action(0,'use-item',{itemId:a.bag[0].id,target:victim.you});assert.deepEqual((await w.state(1)).body.blast.removed,[]);
+ await w.place(1,0);a=await w.wave();await w.action(0,'use-item',{itemId:a.bag[0].id,target:victim.you});assert.deepEqual((await w.state(1)).body.placed,[]);
+ for(let i=0;i<120;i++)await w.place(1,i);a=await w.wave();await w.action(0,'use-item',{itemId:a.bag[0].id,target:victim.you});assert.equal((await w.state(1)).body.blast.removed.length,24);
 });

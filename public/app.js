@@ -5,14 +5,14 @@ let mode='coop',image='coast',state=null,selected=null,source=null,art=null,orde
 const pieceCache=new Map();
 let page=0,zoom=1,counting=false,wonKey='',audioContext=null,soundOn=localStorage.getItem('jj-sound')!=='off';
 const peers=new Map();
-let dismissedResult='',bagKey='',shuffleVersion=0,layoutKey='';
+let dismissedResult='',bagKey='',shuffleVersion=0,layoutKey='',blastSeen='',blastTimer;
 const playable=()=>state?.status==='playing'&&serverTime()>=state.started;
 const cellOf=id=>state.layout[id];
 const savedName=localStorage.getItem('jj-name');if(savedName)$('name').value=savedName;
 function toast(message){$('toast').textContent=message;$('toast').hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').hidden=true,3500);}
 async function api(path,data){const response=await fetch('/api/'+path,{method:data?'POST':'GET',headers:data?{'Content-Type':'application/json'}:{},body:data?JSON.stringify(data):undefined});const result=await response.json();if(!response.ok)throw new Error(result.error||'เชื่อมต่อไม่สำเร็จ');return result;}
 function name(){const v=$('name').value.trim()||'เพื่อนใหม่';localStorage.setItem('jj-name',v);return v;}
-function chooseMode(value){mode=value;$('item-setting-note').textContent=mode==='coop'?'โหมดช่วยกันต่อใช้คำใบ้ทีม • กระเป๋าไอเทมใช้ใน FFA และโหมดทีม':'สุ่มหมอก โล่ หรือสลับถาด · กระเป๋าเต็มจะข้ามรอบนั้น';document.querySelectorAll('[data-mode]').forEach(b=>{b.classList.toggle('selected',b.dataset.mode===mode);b.setAttribute('aria-pressed',String(b.dataset.mode===mode));});}
+function chooseMode(value){mode=value;$('item-setting-note').textContent=mode==='coop'?'โหมดช่วยกันต่อใช้คำใบ้ทีม • กระเป๋าไอเทมใช้ใน FFA และโหมดทีม':'สุ่มหมอก โล่ สลับถาด หรือระเบิดกระดาน · กระเป๋าเต็มจะข้ามรอบนั้น';document.querySelectorAll('[data-mode]').forEach(b=>{b.classList.toggle('selected',b.dataset.mode===mode);b.setAttribute('aria-pressed',String(b.dataset.mode===mode));});}
 document.querySelectorAll('[data-mode]').forEach(b=>b.onclick=()=>chooseMode(b.dataset.mode));
 document.querySelectorAll('[data-image]').forEach(b=>b.onclick=()=>{image=b.dataset.image;if(['mist','tiles','stripes'].includes(image))$('difficulty').value='20';$('upload-info').textContent='';document.querySelectorAll('[data-image]').forEach(q=>{q.classList.toggle('selected',q===b);q.setAttribute('aria-pressed',String(q===b));});});
 $('upload').onchange=async e=>{const file=e.target.files[0];if(!file)return;if(file.size>15000000){toast('เลือกรูปเล็กกว่า 15 MB');return;}try{const bitmap=await createImageBitmap(file);const c=document.createElement('canvas');c.width=960;c.height=720;const ctx=c.getContext('2d');const scale=Math.max(960/bitmap.width,720/bitmap.height);ctx.drawImage(bitmap,(960-bitmap.width*scale)/2,(720-bitmap.height*scale)/2,bitmap.width*scale,bitmap.height*scale);bitmap.close();image=c.toDataURL('image/jpeg',.82);document.querySelectorAll('[data-image]').forEach(q=>{q.classList.remove('selected');q.setAttribute('aria-pressed','false');});$('upload-info').textContent='✓ ใช้รูปของคุณ (ครอปกลางภาพ 4:3)';}catch{toast('อ่านรูปไม่ได้ ลองใช้ JPG, PNG หรือ WebP');}};
@@ -56,7 +56,7 @@ let renderVersion=0;
 async function render(next){
  if(state?.code===next.code&&state.revision>next.revision)return;
  state=next;serverOffset=next.serverNow-Date.now();const version=++renderVersion,key=state.code+':'+state.round;
- if(lastRound!==key){lastRound=key;lastPlaced='';bagKey='';shuffleVersion=state.shuffleVersion;selected=null;order=[...state.order];page=0;counting=false;peers.clear();pieceCache.clear();art=null;zoom=1;$('preview').hidden=true;
+ if(lastRound!==key){blastSeen=next.blast?.id||'';$('blast-effect')?.remove();clearTimeout(blastTimer);$('board-wrap').classList.remove('board-hit');lastRound=key;lastPlaced='';bagKey='';shuffleVersion=state.shuffleVersion;selected=null;order=[...state.order];page=0;counting=false;peers.clear();pieceCache.clear();art=null;zoom=1;$('preview').hidden=true;
   const img=new Image(),src=state.image==='upload'?'/api/image?room='+state.code:'/art/'+state.image+'.svg';await new Promise((resolve,reject)=>{img.onload=resolve;img.onerror=reject;img.src=src;}).catch(()=>toast('โหลดรูปไม่สำเร็จ'));if(version!==renderVersion&&lastRound!==key)return;art=img;$('preview').src=src;
  }
  if(!art?.complete||!art.naturalWidth)return;
@@ -84,6 +84,7 @@ async function render(next){
   if(state.placed.includes(selected)){selected=null;$('drag-ghost')?.remove();drag=null;}
   renderBoard();renderTray();if(animate&&added.length){for(const id of added)$('board').querySelector(`[data-placed="${id}"]`)?.classList.add('snap-in');tone('snap');}
  }else if(changedShuffle)renderTray();
+ if(state.blast?.id&&state.blast.id!==blastSeen){blastSeen=state.blast.id;if(serverTime()-state.blast.at<2000)showBlast(state.blast);}
  if(state.status==='finished'&&wonKey!==key){wonKey=key;if(win)celebrate();}
  const fitKey=state.status+':'+state.mode+':'+state.items;
  if(layoutKey!==fitKey){layoutKey=fitKey;requestAnimationFrame(()=>{if(state){setZoom(zoom);renderTray();}});}
@@ -97,7 +98,7 @@ function renderPlayers(){
   card.setAttribute('aria-label',p.name+(p.online?' ออนไลน์':' ออฟไลน์')+(state.mode==='team'?' '+state.teams.find(t=>t.id===p.team)?.name:''));card.append(dot,name,amount);list.append(card);
  }
 }
-const itemInfo={fog:{icon:'☁',name:'หมอก',detail:'บังภาพคู่แข่ง 6 วินาที'},shield:{icon:'◇',name:'โล่',detail:'ป้องกัน 12 วินาทีและล้างหมอก'},shuffle:{icon:'↻',name:'สลับถาด',detail:'สลับเฉพาะชิ้นที่คู่แข่งยังไม่ต่อ'}};
+const itemInfo={bomb:{icon:'💣',name:'ระเบิด',detail:'ระเบิดชิ้นที่ต่อแล้ว 25% (สูงสุด 24 ชิ้น) กลับถาด · โล่ป้องกันได้'},fog:{icon:'☁',name:'หมอก',detail:'บังภาพคู่แข่ง 6 วินาที'},shield:{icon:'◇',name:'โล่',detail:'ป้องกัน 12 วินาทีและล้างหมอก'},shuffle:{icon:'↻',name:'สลับถาด',detail:'สลับเฉพาะชิ้นที่คู่แข่งยังไม่ต่อ'}};
 function renderInventory(){
  if(!state.items)return;
  const target=$('item-target'),old=target.value,options=state.mode==='team'?state.teams.filter(t=>t.id!==state.team).map(t=>({id:t.id,name:t.name})):state.players.filter(p=>p.id!==state.you);
@@ -153,3 +154,24 @@ let zoomResize;addEventListener('resize',()=>{clearTimeout(zoomResize);zoomResiz
 setInterval(()=>{if(selected!==null&&playable())sendPresence(null,true);},1200);
 
 chooseMode('coop');
+
+// Board-local impact only: no floating messages over other players' screens.
+function showBlast(blast){
+ const wrap=$('board-wrap');$('blast-effect')?.remove();clearTimeout(blastTimer);wrap.classList.remove('board-hit');
+ const effect=document.createElement('div');effect.id='blast-effect';effect.className=blast.blocked?'blast blocked':'blast';effect.setAttribute('role','status');effect.setAttribute('aria-label',blast.blocked?'โล่กันระเบิดแล้ว':`โดนระเบิด ${blast.removed.length} ชิ้นกลับถาด`);
+ const x=((blast.center%state.cols)+.5)*100/state.cols,y=(Math.floor(blast.center/state.cols)+.5)*100/state.rows;effect.style.setProperty('--blast-x',x+'%');effect.style.setProperty('--blast-y',y+'%');
+ const ring=document.createElement('i'),core=document.createElement('b');ring.className='blast-ring';core.className='blast-core';core.textContent=blast.blocked?'◇':'✹';effect.append(ring,core);
+ if(!blast.blocked){
+  for(let i=0;i<18;i++){const spark=document.createElement('i'),angle=i*Math.PI*2/18;spark.className='blast-spark';spark.style.setProperty('--dx',Math.cos(angle)*(70+Math.random()*130)+'px');spark.style.setProperty('--dy',Math.sin(angle)*(70+Math.random()*130)+'px');spark.style.setProperty('--spin',(Math.random()*500-250)+'deg');effect.append(spark);}
+  for(const id of blast.removed.slice(0,12)){const shard=copyCanvas(id),cell=cellOf(id);shard.className='blast-shard';shard.style.left=((cell%state.cols)+.5)*100/state.cols+'%';shard.style.top=(Math.floor(cell/state.cols)+.5)*100/state.rows+'%';shard.style.width=Math.max(18,130/state.cols)+'%';shard.style.setProperty('--dx',((cell%state.cols+.5)/state.cols*2-1)*180+'px');shard.style.setProperty('--dy',70+Math.random()*180+'px');shard.style.setProperty('--spin',(Math.random()*240-120)+'deg');effect.append(shard);}
+  wrap.classList.add('board-hit');bombSound();
+ }else tone('snap');
+ wrap.append(effect);blastTimer=setTimeout(()=>{effect.remove();wrap.classList.remove('board-hit');},1400);
+}
+function bombSound(){
+ if(!soundOn||!audioContext||audioContext.state!=='running')return;
+ try{const ctx=audioContext,t=ctx.currentTime,buffer=ctx.createBuffer(1,Math.ceil(ctx.sampleRate*.65),ctx.sampleRate),data=buffer.getChannelData(0);for(let i=0;i<data.length;i++)data[i]=(Math.random()*2-1)*(1-i/data.length)**2;
+ const noise=ctx.createBufferSource(),filter=ctx.createBiquadFilter(),gain=ctx.createGain();noise.buffer=buffer;filter.type='lowpass';filter.frequency.setValueAtTime(2600,t);filter.frequency.exponentialRampToValueAtTime(90,t+.6);gain.gain.setValueAtTime(.24,t);gain.gain.exponentialRampToValueAtTime(.001,t+.65);noise.connect(filter);filter.connect(gain);gain.connect(ctx.destination);noise.start(t);noise.stop(t+.65);
+ const bass=ctx.createOscillator(),low=ctx.createGain();bass.frequency.setValueAtTime(140,t);bass.frequency.exponentialRampToValueAtTime(32,t+.4);low.gain.setValueAtTime(.22,t);low.gain.exponentialRampToValueAtTime(.001,t+.5);bass.connect(low);low.connect(ctx.destination);bass.start(t);bass.stop(t+.5);
+ }catch{}
+}
