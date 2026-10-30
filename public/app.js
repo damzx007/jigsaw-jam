@@ -5,24 +5,27 @@ let mode='coop',image='coast',state=null,selected=null,source=null,art=null,orde
 const pieceCache=new Map();
 let page=0,zoom=1,counting=false,wonKey='',audioContext=null,soundOn=localStorage.getItem('jj-sound')!=='off';
 const peers=new Map();
+let dismissedResult='',bagKey='',shuffleVersion=0,layoutKey='';
 const playable=()=>state?.status==='playing'&&serverTime()>=state.started;
 const cellOf=id=>state.layout[id];
 const savedName=localStorage.getItem('jj-name');if(savedName)$('name').value=savedName;
 function toast(message){$('toast').textContent=message;$('toast').hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').hidden=true,3500);}
 async function api(path,data){const response=await fetch('/api/'+path,{method:data?'POST':'GET',headers:data?{'Content-Type':'application/json'}:{},body:data?JSON.stringify(data):undefined});const result=await response.json();if(!response.ok)throw new Error(result.error||'เชื่อมต่อไม่สำเร็จ');return result;}
 function name(){const v=$('name').value.trim()||'เพื่อนใหม่';localStorage.setItem('jj-name',v);return v;}
-function chooseMode(value){mode=value;document.querySelectorAll('[data-mode]').forEach(b=>{b.classList.toggle('selected',b.dataset.mode===mode);b.setAttribute('aria-pressed',String(b.dataset.mode===mode));});}
+function chooseMode(value){mode=value;$('item-setting-note').textContent=mode==='coop'?'โหมดช่วยกันต่อใช้คำใบ้ทีม • กระเป๋าไอเทมใช้ใน FFA และโหมดทีม':'สุ่มหมอก โล่ หรือสลับถาด · กระเป๋าเต็มจะข้ามรอบนั้น';document.querySelectorAll('[data-mode]').forEach(b=>{b.classList.toggle('selected',b.dataset.mode===mode);b.setAttribute('aria-pressed',String(b.dataset.mode===mode));});}
 document.querySelectorAll('[data-mode]').forEach(b=>b.onclick=()=>chooseMode(b.dataset.mode));
 document.querySelectorAll('[data-image]').forEach(b=>b.onclick=()=>{image=b.dataset.image;if(['mist','tiles','stripes'].includes(image))$('difficulty').value='20';$('upload-info').textContent='';document.querySelectorAll('[data-image]').forEach(q=>{q.classList.toggle('selected',q===b);q.setAttribute('aria-pressed',String(q===b));});});
 $('upload').onchange=async e=>{const file=e.target.files[0];if(!file)return;if(file.size>15000000){toast('เลือกรูปเล็กกว่า 15 MB');return;}try{const bitmap=await createImageBitmap(file);const c=document.createElement('canvas');c.width=960;c.height=720;const ctx=c.getContext('2d');const scale=Math.max(960/bitmap.width,720/bitmap.height);ctx.drawImage(bitmap,(960-bitmap.width*scale)/2,(720-bitmap.height*scale)/2,bitmap.width*scale,bitmap.height*scale);bitmap.close();image=c.toDataURL('image/jpeg',.82);document.querySelectorAll('[data-image]').forEach(q=>{q.classList.remove('selected');q.setAttribute('aria-pressed','false');});$('upload-info').textContent='✓ ใช้รูปของคุณ (ครอปกลางภาพ 4:3)';}catch{toast('อ่านรูปไม่ได้ ลองใช้ JPG, PNG หรือ WebP');}};
-async function enter(data){state=data;selected=null;lastRound='';lastPlaced='';$('home').hidden=true;$('room').hidden=false;history.replaceState(null,'','/?room='+state.code);connect();await render(data);window.scrollTo({top:0,behavior:'smooth'});}
-$('create').onclick=async()=>{if(busy)return;busy=true;$('create').disabled=true;try{await enter(await api('create',{name:name(),mode,image,cols:Number($('difficulty').value),items:$('items').checked,preview:$('preview-mode').value}));}catch(e){toast(e.message);}finally{busy=false;$('create').disabled=false;}};
+async function enter(data){state=data;document.body.classList.add('in-room');selected=null;lastRound='';lastPlaced='';$('home').hidden=true;$('room').hidden=false;history.replaceState(null,'','/?room='+state.code);connect();await render(data);window.scrollTo({top:0,behavior:'smooth'});}
+$('create').onclick=async()=>{if(busy)return;busy=true;$('create').disabled=true;try{await enter(await api('create',{name:name(),mode,image,cols:Number($('difficulty').value),items:$('items').checked,preview:$('preview-mode').value,bagSize:Number($('bag-size').value),itemInterval:Number($('item-interval').value)}));}catch(e){toast(e.message);}finally{busy=false;$('create').disabled=false;}};
 $('join-form').onsubmit=async e=>{e.preventDefault();if(busy)return;busy=true;try{await enter(await api('join',{name:name(),code:$('join-code').value.trim()}));}catch(e){toast(e.message);}finally{busy=false;}};
 function connect(){peers.clear();source?.close();source=new EventSource('/api/events?room='+state.code);source.onmessage=e=>{try{render(JSON.parse(e.data));$('connection').textContent='● เชื่อมต่อแล้ว';}catch{toast('ข้อมูลห้องผิดพลาด');}};source.addEventListener('presence',e=>{const p=JSON.parse(e.data);p.received=Date.now();peers.set(p.id,p);drawPeers();});source.onerror=()=>{$('connection').textContent='○ กำลังเชื่อมต่อใหม่…';};}
 async function action(type,extra={}){try{const result=await api('action',{code:state.code,type,...extra});if(result.state)await render(result.state);return result;}catch(e){toast(e.message);return null;}}
-$('ready').onclick=()=>{unlockAudio();action('ready');};$('start').onclick=()=>{unlockAudio();action('start');};$('rematch').onclick=()=>action('rematch');$('attack').onclick=()=>{unlockAudio();action('fog').then(r=>{if(r)tone('go');});};$('shield').onclick=()=>{unlockAudio();action('shield').then(r=>{if(r)tone('go');});};
+$('ready').onclick=()=>{unlockAudio();action('ready');};$('start').onclick=()=>{unlockAudio();action('start');};$('rematch').onclick=()=>action('rematch');
+$('my-team').onchange=()=>action('team',{team:$('my-team').value});
+$('result-close').onclick=()=>{dismissedResult=state.code+':'+state.round;$('result').hidden=true;};
 $('share').onclick=async()=>{const link=location.origin+'/?room='+state.code;try{await navigator.clipboard.writeText(link);toast('คัดลอกลิงก์แล้ว ส่งให้เพื่อนได้เลย');}catch{toast('คัดลอกไม่ได้ รหัสห้อง: '+state.code);}};
-$('leave').onclick=async()=>{const result=await api('leave',{code:state.code}).catch(e=>{toast(e.message);return null;});if(!result)return;source?.close();source=null;state=null;history.replaceState(null,'','/');$('room').hidden=true;$('home').hidden=false;toast('ออกจากห้องแล้ว');};
+$('leave').onclick=async()=>{const result=await api('leave',{code:state.code}).catch(e=>{toast(e.message);return null;});if(!result)return;source?.close();source=null;state=null;document.body.classList.remove('in-room');$('drag-ghost')?.remove();drag=null;history.replaceState(null,'','/');$('room').hidden=true;$('home').hidden=false;toast('ออกจากห้องแล้ว');};
 $('preview-button').onclick=()=>{if(state.preview==='start'&&state.status!=='finished'){toast('ห้องนี้ดูภาพได้เฉพาะตอนเริ่ม');return;}if(state?.fog>serverTime()){toast('ติดหมอกอยู่ รอให้หมดก่อน');return;}$('preview').hidden=!$('preview').hidden;};
 $('shuffle').onclick=()=>{if(!state)return;order.sort(()=>Math.random()-.5);renderTray();};
 $('hint').onclick=async()=>{if(selected===null){toast('เลือกชิ้นที่อยากได้คำใบ้ก่อน');return;}const result=await action('hint',{piece:selected});if(result?.hint!==undefined){const cell=$('board').querySelector(`[data-cell="${result.hint}"]`);cell?.classList.add('hint');setTimeout(()=>cell?.classList.remove('hint'),2500);}};
@@ -36,39 +39,95 @@ function renderBoard(){
  for(const id of state.placed){const cell=cellOf(id),c=copyCanvas(id),w=96,h=c.height-48;c.dataset.placed=id;c.style.left=((cell%state.cols)-24/w)*100/state.cols+'%';c.style.top=(Math.floor(cell/state.cols)-24/h)*100/state.rows+'%';c.style.width=(w+48)/w*100/state.cols+'%';c.style.height=(h+48)/h*100/state.rows+'%';board.append(c);}
 }
 function renderTray(){
- if(!art)return;const tray=$('tray');tray.replaceChildren();const remaining=order.filter(id=>!state.placed.includes(id)),pageSize=matchMedia('(max-width:740px)').matches?12:48,pages=Math.max(1,Math.ceil(remaining.length/pageSize));page=Math.min(page,pages-1);
+ if(!art)return;const tray=$('tray');tray.replaceChildren();const remaining=order.filter(id=>!state.placed.includes(id)),cols=Math.max(3,Math.min(8,Math.floor(tray.clientWidth/74))),rows=Math.max(1,Math.min(4,Math.floor(tray.clientHeight/56))),pageSize=cols*rows,pages=Math.max(1,Math.ceil(remaining.length/pageSize));page=Math.min(page,pages-1);tray.style.setProperty('--tray-cols',cols);tray.style.setProperty('--tray-rows',rows);
  $('page-label').textContent=`ถาด ${page+1} / ${pages}`;$('prev-page').disabled=page===0;$('next-page').disabled=page>=pages-1;
  for(const id of remaining.slice(page*pageSize,(page+1)*pageSize)){
  const button=document.createElement('button');button.className='piece'+(selected===id?' selected':'');button.dataset.piece=id;button.setAttribute('aria-label','เลือกชิ้น '+(order.indexOf(id)+1));button.setAttribute('aria-pressed',String(selected===id));button.disabled=!playable();button.append(copyCanvas(id));
  button.onclick=()=>{if(drag?.moved)return;unlockAudio();select(id);sendPresence(null,true);};
  button.onpointerdown=e=>{if(!playable())return;unlockAudio();select(id);drag={id,x:e.clientX,y:e.clientY,moved:false,pointer:e.pointerId};button.setPointerCapture(e.pointerId);sendPresence(e,true);};
- button.onpointermove=e=>{if(!drag||drag.pointer!==e.pointerId)return;if(Math.hypot(e.clientX-drag.x,e.clientY-drag.y)>7)drag.moved=true;if(drag.moved){if(e.clientY<75)scrollBy(0,-18);else if(e.clientY>innerHeight-60)scrollBy(0,18);let ghost=$('drag-ghost');if(!ghost){ghost=copyCanvas(id);ghost.id='drag-ghost';document.body.append(ghost);}ghost.style.transform=`translate3d(${e.clientX-48}px,${e.clientY-55}px,0) rotate(-3deg) scale(1.12)`;sendPresence(e);}};
+ button.onpointermove=e=>{if(!drag||drag.pointer!==e.pointerId)return;if(Math.hypot(e.clientX-drag.x,e.clientY-drag.y)>7)drag.moved=true;if(drag.moved){let ghost=$('drag-ghost');if(!ghost){ghost=copyCanvas(id);ghost.id='drag-ghost';document.body.append(ghost);}ghost.style.transform=`translate3d(${e.clientX-48}px,${e.clientY-55}px,0) rotate(-3deg) scale(1.12)`;sendPresence(e);}};
  button.onpointerup=e=>{if(!drag)return;const moved=drag.moved;$('drag-ghost')?.remove();if(moved){const rect=$('board').getBoundingClientRect(),col=Math.floor((e.clientX-rect.left)/rect.width*state.cols),row=Math.floor((e.clientY-rect.top)/rect.height*state.rows);if(col>=0&&col<state.cols&&row>=0&&row<state.rows)place(row*state.cols+col);}setTimeout(()=>drag=null,0);};
  button.onpointercancel=()=>{$('drag-ghost')?.remove();drag=null;selected=null;sendPresence(null,true);};tray.append(button);
  }drawPeers();
 }
 function select(id){selected=id;$('tray').querySelectorAll('.piece').forEach(b=>{const active=Number(b.dataset.piece)===id;b.classList.toggle('selected',active);b.setAttribute('aria-pressed',String(active));});}
-async function place(cell){if(selected===null){toast('เลือกชิ้นจากถาดก่อนนะ');return;}if(busy||!playable())return;busy=true;const id=selected;try{const result=await action('place',{piece:id,cell});if(result){if(selected===id)selected=null;sendPresence(null,true);renderTray();}}finally{busy=false;}}
+async function place(cell){if(selected===null){return;}if(busy||!playable())return;busy=true;const id=selected;try{const result=await action('place',{piece:id,cell});if(result){if(selected===id)selected=null;sendPresence(null,true);renderTray();}}finally{busy=false;}}
 let renderVersion=0;
-async function render(next){if(state?.code===next.code&&state.revision>next.revision)return;state=next;serverOffset=next.serverNow-Date.now();const version=++renderVersion;const key=state.code+':'+state.round;if(lastRound!==key){lastRound=key;lastPlaced='';selected=null;order=[...state.order];page=0;counting=false;peers.clear();pieceCache.clear();art=null;setZoom(1);$('preview').hidden=true;const img=new Image();const src=state.image==='upload'?'/api/image?room='+state.code:'/art/'+state.image+'.svg';await new Promise((resolve,reject)=>{img.onload=resolve;img.onerror=reject;img.src=src;}).catch(()=>toast('โหลดรูปไม่สำเร็จ'));if(version!==renderVersion&&lastRound!==key)return;art=img;$('preview').src=src;}
+async function render(next){
+ if(state?.code===next.code&&state.revision>next.revision)return;
+ state=next;serverOffset=next.serverNow-Date.now();const version=++renderVersion,key=state.code+':'+state.round;
+ if(lastRound!==key){lastRound=key;lastPlaced='';bagKey='';shuffleVersion=state.shuffleVersion;selected=null;order=[...state.order];page=0;counting=false;peers.clear();pieceCache.clear();art=null;zoom=1;$('preview').hidden=true;
+  const img=new Image(),src=state.image==='upload'?'/api/image?room='+state.code:'/art/'+state.image+'.svg';await new Promise((resolve,reject)=>{img.onload=resolve;img.onerror=reject;img.src=src;}).catch(()=>toast('โหลดรูปไม่สำเร็จ'));if(version!==renderVersion&&lastRound!==key)return;art=img;$('preview').src=src;
+ }
  if(!art?.complete||!art.naturalWidth)return;
- const coop=state.mode==='coop',host=state.host===state.you,playing=state.status==='playing';$('room-code').textContent=state.code;$('room-mode').textContent=coop?'CO-OP SESSION':'FRIENDLY RIVALRY';$('room-title').textContent=coop?'ต่อด้วยกัน ให้ครบภาพ':'ใครต่อครบก่อน ชนะ!';$('progress').textContent=state.placed.length+' / '+state.cols*state.rows+' ชิ้น';$('player-count').textContent=state.players.length+' / '+(coop?4:2);$('hint').hidden=!coop||state.preview==='start';$('preview-button').disabled=state.preview==='start'&&state.status!=='finished';$('preview-button').textContent=state.preview==='start'&&state.status!=='finished'?'◉ ดูได้เฉพาะตอนเริ่ม':'◉ ดูรูปตัวอย่าง';$('hint-count').textContent=state.hints;$('hint').disabled=!playable()||!state.hints;$('powers').hidden=coop||!state.items;$('tip').textContent=state.preview==='start'?'ห้องนี้ดูภาพได้เฉพาะตอนนับถอยหลัง ไม่มีคำใบ้ภาพระหว่างเล่น ลองแบ่งกันสังเกตรอยตัด!':coop?'ต่อครบทุก 5 ชิ้น รับคำใบ้ทีม 1 ครั้ง ลองแบ่งกันหาคนละส่วน!':'ภาพและชิ้นส่วนเหมือนกันทั้งคู่ ไอเทมไม่รื้อผลงานที่ต่อแล้ว เปิดโล่เพื่อล้างหมอกได้';
- $('players').replaceChildren();for(const p of state.players){const el=document.createElement('div');el.className='player';const row=document.createElement('div');row.className='player-row';const av=document.createElement('span');av.className='avatar';av.textContent=Array.from(p.name)[0];const label=document.createElement('span');label.className='player-name';label.textContent=p.name+(p.id===state.you?' (คุณ)':'');const status=document.createElement('small');status.textContent=state.status==='lobby'?(p.ready?'✓ พร้อม':p.online?'ออนไลน์':'ออฟไลน์'):p.count+' ชิ้น';row.append(av,label,status);el.append(row);if(!coop){const bar=document.createElement('progress');bar.max=state.cols*state.rows;bar.value=p.count;bar.setAttribute('aria-label','ความคืบหน้าของ '+p.name);el.append(bar);}$('players').append(el);}
- $('lobby').hidden=state.status!=='lobby';$('ready').hidden=coop;$('ready').textContent=state.players.find(p=>p.id===state.you)?.ready?'✓ พร้อมแล้ว (แตะเพื่อยกเลิก)':'พร้อมเล่น';$('start').hidden=!host;$('start').disabled=!coop&&(state.players.length!==2||!state.players.every(p=>p.ready));$('lobby-message').textContent=coop?(host?'ชวนเพื่อน แล้วกดเริ่มเกมได้เลย':'รอเจ้าของห้องกดเริ่มเกม'):'ทั้งสองคนกดพร้อม แล้วเจ้าของห้องกดเริ่ม';$('result').hidden=state.status!=='finished';$('result-title').textContent=coop?'ครบภาพแล้ว! 🎉':state.winner===state.you?'ชนะแล้ว! 🏆':'รอบหน้าเอาใหม่ ✦';$('result-detail').textContent=coop?'ฝีมือของทั้งทีม เก็บภาพนี้ไว้ในความทรงจำ':'ผู้ชนะ: '+(state.players.find(p=>p.id===state.winner)?.name||'');$('rematch').hidden=!host;
- $('charge').replaceChildren();for(let i=0;i<5;i++){const el=document.createElement('i');el.className=i<state.charge?'filled':'';$('charge').append(el);}$('attack').disabled=!playable()||state.charge<3;$('shield').disabled=!playable()||state.charge<2;
- const placedKey=key+':'+state.status+':'+state.placed.join(',');if(lastPlaced!==placedKey){const oldIds=new Set([...$('board').querySelectorAll('[data-placed]')].map(c=>Number(c.dataset.placed)));const added=state.placed.filter(id=>!oldIds.has(id));const animate=lastPlaced!=='';lastPlaced=placedKey;if(state.placed.includes(selected))selected=null;renderBoard();renderTray();if(animate&&added.length){for(const id of added){$('board').querySelector(`[data-placed="${id}"]`)?.classList.add('snap-in');}tone('snap');}}if(state.status==='finished'&&wonKey!==key){wonKey=key;celebrate();}tick();
+ const coop=state.mode==='coop',team=state.mode==='team',host=state.host===state.you,me=state.players.find(p=>p.id===state.you);
+ document.documentElement.style.setProperty('--my-color',me?.color||'#edaf57');
+ $('room-code').textContent=state.code;$('room-mode').textContent=coop?'CO-OP':team?'TEAM VS TEAM':'FREE FOR ALL';
+ $('room-title').textContent=coop?'ต่อด้วยกัน ให้ครบภาพ':team?'ช่วยทีมเรา ต่อให้ครบก่อน':'ใครต่อครบก่อน ชนะ!';
+ $('progress').textContent=state.placed.length+' / '+state.cols*state.rows+' ชิ้น';$('player-count').textContent=state.players.length+' / 8 คน';
+ $('hint').hidden=!coop||state.preview==='start';$('hint-count').textContent=state.hints;$('hint').disabled=!playable()||!state.hints;
+ $('preview-button').disabled=state.preview==='start'&&state.status!=='finished';$('preview-button').textContent=state.preview==='start'&&state.status!=='finished'?'◉ ดูเฉพาะตอนเริ่ม':'◉ ดูรูป';
+ renderPlayers();
+ $('lobby').hidden=state.status!=='lobby';$('ready').hidden=coop;$('ready').textContent=me?.ready?'✓ พร้อมแล้ว':'พร้อมเล่น';
+ $('team-picker').hidden=!team;$('my-team').value=state.team;
+ $('start').hidden=!host;$('start').disabled=!coop&&(state.players.length<2||!state.players.every(p=>p.ready)||(team&&new Set(state.players.map(p=>p.team)).size<2));
+ $('lobby-message').textContent=coop?(host?'เล่นคนเดียวได้ หรือชวนเพื่อนก่อนเริ่ม':'รอเจ้าของห้องเริ่มเกม'):team?'เลือกทีม แล้วทุกคนกดพร้อม':'แข่งคนละกระดาน ทุกคนกดพร้อมก่อนเริ่ม';
+ $('result').hidden=state.status!=='finished'||dismissedResult===key;
+ const win=coop||(team?state.winner===state.team:state.winner===state.you);
+ $('result-title').textContent=coop?'ครบภาพแล้ว! 🎉':win?'ชนะแล้ว! 🏆':'รอบหน้าเอาใหม่ ✦';
+ $('result-detail').textContent=coop?'ฝีมือของทั้งทีม':team?'ผู้ชนะ: '+(state.teams.find(t=>t.id===state.winner)?.name||''):'ผู้ชนะ: '+(state.players.find(p=>p.id===state.winner)?.name||'');$('rematch').hidden=!host;
+ $('powers').hidden=!state.items;renderInventory();
+ const changedShuffle=shuffleVersion!==state.shuffleVersion;
+ if(changedShuffle){shuffleVersion=state.shuffleVersion;order.sort(()=>Math.random()-.5);selected=null;$('drag-ghost')?.remove();drag=null;sendPresence(null,true);}
+ const placedKey=key+':'+state.team+':'+state.status+':'+state.placed.join(',');
+ if(lastPlaced!==placedKey){const oldIds=new Set([...$('board').querySelectorAll('[data-placed]')].map(c=>Number(c.dataset.placed))),added=state.placed.filter(id=>!oldIds.has(id)),animate=lastPlaced!=='';lastPlaced=placedKey;
+  if(state.placed.includes(selected)){selected=null;$('drag-ghost')?.remove();drag=null;}
+  renderBoard();renderTray();if(animate&&added.length){for(const id of added)$('board').querySelector(`[data-placed="${id}"]`)?.classList.add('snap-in');tone('snap');}
+ }else if(changedShuffle)renderTray();
+ if(state.status==='finished'&&wonKey!==key){wonKey=key;if(win)celebrate();}
+ const fitKey=state.status+':'+state.mode+':'+state.items;
+ if(layoutKey!==fitKey){layoutKey=fitKey;requestAnimationFrame(()=>{if(state){setZoom(zoom);renderTray();}});}
+ tick();drawPeers();
 }
-function tick(){if(!state)return;const now=serverTime();const secs=state.started?Math.max(0,Math.floor(((state.finished||now)-state.started)/1000)):0;$('clock').textContent=String(Math.floor(secs/60)).padStart(2,'0')+':'+String(secs%60).padStart(2,'0');const before=state.status==='playing'&&now<state.started;
- $('countdown').hidden=!before;
+function renderPlayers(){
+ const list=$('players');list.replaceChildren();
+ if(state.mode==='team')for(const t of state.teams){const score=document.createElement('div');score.className='team-score';score.style.setProperty('--player-color',t.color);score.textContent=t.name+' '+t.count+'/'+state.cols*state.rows;list.append(score);}
+ for(const p of state.players){const card=document.createElement('div');card.className='player-chip'+(p.online?'':' offline');card.style.setProperty('--player-color',p.color);if(state.mode==='team')card.dataset.team=p.team;
+  const dot=document.createElement('i'),name=document.createElement('span'),amount=document.createElement('small');name.className='player-name';name.textContent=p.name+(p.id===state.you?' · คุณ':'');amount.textContent=state.status==='lobby'?(p.ready?'✓':'—'):state.mode==='ffa'?p.progress+'/'+state.cols*state.rows:String(p.count);
+  card.setAttribute('aria-label',p.name+(p.online?' ออนไลน์':' ออฟไลน์')+(state.mode==='team'?' '+state.teams.find(t=>t.id===p.team)?.name:''));card.append(dot,name,amount);list.append(card);
+ }
+}
+const itemInfo={fog:{icon:'☁',name:'หมอก',detail:'บังภาพคู่แข่ง 6 วินาที'},shield:{icon:'◇',name:'โล่',detail:'ป้องกัน 12 วินาทีและล้างหมอก'},shuffle:{icon:'↻',name:'สลับถาด',detail:'สลับเฉพาะชิ้นที่คู่แข่งยังไม่ต่อ'}};
+function renderInventory(){
+ if(!state.items)return;
+ const target=$('item-target'),old=target.value,options=state.mode==='team'?state.teams.filter(t=>t.id!==state.team).map(t=>({id:t.id,name:t.name})):state.players.filter(p=>p.id!==state.you);
+ const optionsKey=options.map(p=>p.id+':'+p.name).join('|');
+ if(target.dataset.options!==optionsKey){target.dataset.options=optionsKey;target.replaceChildren();for(const p of options){const option=document.createElement('option');option.value=p.id;option.textContent=p.name;target.append(option);}if(options.some(p=>p.id===old))target.value=old;}
+ $('bag-count').textContent=state.bag.length+'/'+state.bagSize;
+ const key=state.bag.map(i=>i.id).join(',')+':'+state.bagSize;
+ if(key!==bagKey){const previous=new Set([...$('inventory').querySelectorAll('[data-item]')].map(el=>el.dataset.item));bagKey=key;$('inventory').replaceChildren();
+  for(let i=0;i<state.bagSize;i++){const item=state.bag[i],slot=document.createElement('button');slot.className='item-slot';
+   if(item){const info=itemInfo[item.type];slot.dataset.item=item.id;slot.title=info.detail+(state.mode==='team'?' · มีผลทั้งทีม':'');slot.setAttribute('aria-label','ใช้'+info.name);const icon=document.createElement('span'),label=document.createElement('small');icon.textContent=info.icon;label.textContent=info.name;slot.append(icon,label);if(!previous.has(item.id))slot.classList.add('item-arrived');slot.onclick=()=>{unlockAudio();action('use-item',{itemId:item.id,target:target.value}).then(r=>{if(r)tone('go');});};}
+   else{slot.classList.add('empty');slot.textContent='·';slot.setAttribute('aria-label','ช่องกระเป๋าว่าง');}slot.disabled=!item||!playable();$('inventory').append(slot);
+  }
+ }
+}
+function tick(){
+ if(!state)return;const now=serverTime(),secs=state.started?Math.max(0,Math.floor(((state.finished||now)-state.started)/1000)):0;
+ $('clock').textContent=String(Math.floor(secs/60)).padStart(2,'0')+':'+String(secs%60).padStart(2,'0');
+ const before=state.status==='playing'&&now<state.started;$('countdown').hidden=!before;
  if(before){counting=true;$('preview').hidden=false;$('countdown-number').textContent=Math.ceil((state.started-now)/1000);}
  else if(counting){counting=false;$('preview').hidden=true;renderBoard();renderTray();tone('go');}
  $('shield-ring').hidden=!(state.status==='playing'&&state.shield>now);
- $('attack').disabled=!playable()||state.charge<3;$('shield').disabled=!playable()||state.charge<2;
- const fog=state.status==='playing'&&state.fog>now;$('fog-overlay').hidden=!fog;if(fog){$('preview').hidden=true;$('fog-time').textContent=Math.ceil((state.fog-now)/1000)+' วินาที';}$('shield-status').textContent=state.shield>now?'◇ โล่ทำงานอีก '+Math.ceil((state.shield-now)/1000)+' วินาที':'หมอก 6 วินาที · โล่ 12 วินาที';}
+ const fog=state.status==='playing'&&state.fog>now;$('fog-overlay').hidden=!fog;if(fog){$('preview').hidden=true;$('fog-time').textContent=Math.ceil((state.fog-now)/1000)+' วิ';}
+ $('shield-status').textContent=state.shield>now&&state.status==='playing'?'◇ '+Math.ceil((state.shield-now)/1000)+' วิ':'';
+ if(state.items){$('next-item').textContent=state.status==='lobby'?'สุ่มทุก '+state.itemInterval+' วิ':state.status==='finished'?'จบรอบ':state.bag.length>=state.bagSize?'เต็ม · รอบใหม่ '+Math.max(0,Math.ceil((state.nextItemAt-now)/1000))+' วิ':'สุ่มใน '+Math.max(0,Math.ceil((state.nextItemAt-now)/1000))+' วิ';
+  $('inventory').querySelectorAll('button').forEach(button=>button.disabled=!button.dataset.item||!playable());}
+}
 setInterval(()=>{tick();drawPeers();},200);
 const roomCode=new URLSearchParams(location.search).get('room');if(roomCode){$('join-code').value=roomCode.toUpperCase();api('state?room='+encodeURIComponent(roomCode)).then(enter).catch(()=>{toast('ใส่ชื่อ แล้วกดเข้าห้องเพื่อเล่นกับเพื่อน');$('name').focus();});}
 
-function setZoom(value){zoom=Math.max(1,Math.min(3,value));const base=Math.min(Math.max(240,$('board-scroll').clientWidth-28),Math.max(260,innerHeight*.46)*4/3);$('board-wrap').style.width=(base*zoom)+'px';$('zoom-label').textContent=Math.round(zoom*100)+'%';}
+function setZoom(value){zoom=Math.max(1,Math.min(3,value));const scroll=$('board-scroll'),base=Math.min(Math.max(100,scroll.clientWidth-26),Math.max(80,scroll.clientHeight-30)*4/3);$('board-wrap').style.width=(base*zoom)+'px';$('zoom-label').textContent=Math.round(zoom*100)+'%';}
 $('zoom-in').onclick=()=>setZoom(zoom+.25);$('zoom-out').onclick=()=>setZoom(zoom-.25);
 $('prev-page').onclick=()=>{page--;renderTray();};$('next-page').onclick=()=>{page++;renderTray();};
 function applyTheme(theme){document.documentElement.dataset.theme=theme;localStorage.setItem('jj-theme',theme);$('theme-toggle').textContent=theme==='dark'?'☀ สว่าง':'☾ มืด';$('theme-toggle').setAttribute('aria-pressed',String(theme==='dark'));}
@@ -80,9 +139,17 @@ function soundLabel(){$('sound-toggle').textContent=soundOn?'♫ เสียง
 $('sound-toggle').onclick=()=>{soundOn=!soundOn;localStorage.setItem('jj-sound',soundOn?'on':'off');soundLabel();unlockAudio();if(soundOn)tone('snap');};
 function celebrate(){tone('win');const target=$('confetti');target.replaceChildren();target.hidden=false;for(let i=0;i<36;i++){const el=document.createElement('i');el.style.setProperty('--x',(Math.random()*100)+'%');el.style.setProperty('--delay',(Math.random()*.5)+'s');el.style.setProperty('--color',['#e1ba6c','#8eac98','#d18c77','#c5b5d6'][i%4]);el.style.setProperty('--spin',(Math.random()*600)+'deg');target.append(el);}setTimeout(()=>target.hidden=true,4500);}
 let presenceAt=0;
-function sendPresence(e,force=false){if(!state||state.status!=='playing'||!playable())return;const now=Date.now();if(!force&&now-presenceAt<180)return;presenceAt=now;const rect=$('board').getBoundingClientRect(),x=e?(e.clientX-rect.left)/rect.width:0,y=e?(e.clientY-rect.top)/rect.height:0;api('presence',{code:state.code,x,y,zone:e&&x>=0&&x<=1&&y>=0&&y<=1?'board':'tray',piece:selected}).catch(()=>{});}
-$('board-wrap').addEventListener('pointermove',e=>sendPresence(e));$('board-wrap').addEventListener('pointerleave',()=>sendPresence(null,true));
-function drawPeers(){if(!state)return;const active=new Set(state.players.filter(p=>p.online).map(p=>p.id));const layer=$('cursors');layer.replaceChildren();$('tray').querySelectorAll('.held-by').forEach(el=>el.remove());$('tray').querySelectorAll('.held').forEach(el=>el.classList.remove('held'));for(const [id,p] of peers){if(Date.now()-p.received>4500||!active.has(id)){peers.delete(id);continue;}if(p.zone==='board'&&state.status==='playing'){const cursor=document.createElement('div');cursor.className='friend-cursor';cursor.style.left=p.x*100+'%';cursor.style.top=p.y*100+'%';const label=document.createElement('span');label.textContent=p.name+(p.piece!==null?' · กำลังถือชิ้น':'');cursor.append(document.createTextNode('➤'),label);layer.append(cursor);}if(p.piece!==null){const piece=$('tray').querySelector(`[data-piece="${p.piece}"]`);if(piece){piece.classList.add('held');const badge=document.createElement('span');badge.className='held-by';badge.textContent=p.name;piece.append(badge);}}}}
-
+function sendPresence(e,force=false){if(!playable())return;const now=Date.now();if(!force&&now-presenceAt<300)return;presenceAt=now;api('presence',{code:state.code,piece:selected}).catch(()=>{});}
+function drawPeers(){
+ if(!state)return;
+ $('tray').querySelectorAll('.held').forEach(el=>{el.classList.remove('held');el.style.removeProperty('--holder-color');});
+ if(state.mode==='ffa')return;
+ for(const [id,presence] of peers){const player=state.players.find(p=>p.id===id);if(Date.now()-presence.received>4500||!player?.online){peers.delete(id);continue;}
+  if(state.mode==='team'&&player.team!==state.team)continue;
+  if(presence.piece!==null){const piece=$('tray').querySelector(`[data-piece="${presence.piece}"]`);if(piece){piece.classList.add('held');piece.style.setProperty('--holder-color',player.color);}}
+ }
+}
 let zoomResize;addEventListener('resize',()=>{clearTimeout(zoomResize);zoomResize=setTimeout(()=>{if(state){setZoom(zoom);renderTray();}},120);});
 setInterval(()=>{if(selected!==null&&playable())sendPresence(null,true);},1200);
+
+chooseMode('coop');
